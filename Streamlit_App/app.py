@@ -101,10 +101,10 @@ footer{visibility:hidden;} #MainMenu{visibility:hidden;}
 # ── Load artifacts ─────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Loading model...")
 def load_artifacts():
-    model         = joblib.load("../Model/attrition_model.pkl")
-    scaler        = joblib.load("../Model/scaler.pkl")
-    encoders      = joblib.load("../Model/encoders.pkl")
-    feature_names = joblib.load("../Model/feature_names.pkl")
+    model         = joblib.load("Model/attrition_model.pkl")
+    scaler        = joblib.load("Model/scaler.pkl")
+    encoders      = joblib.load("Model/encoders.pkl")
+    feature_names = joblib.load("Model/feature_names.pkl")
     return model, scaler, encoders, feature_names
 
 try:
