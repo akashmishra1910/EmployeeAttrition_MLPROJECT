@@ -1,8 +1,6 @@
-Here’s a professional README.md for your Employee Attrition Intelligence Platform project that will look strong on GitHub and help your project stand out.
 
-⸻
 
-📊 Employee Attrition Intelligence Platform
+📊 # Employee Attrition Intelligence Platform
 
 An end-to-end Machine Learning application that predicts employee attrition risk and provides actionable workforce insights. The system helps HR teams identify employees who are likely to leave the organization and enables proactive retention strategies.
 
