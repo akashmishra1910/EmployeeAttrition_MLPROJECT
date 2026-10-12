@@ -21,32 +21,26 @@ from datetime import datetime
 import os
 import sys
 
-# ── Ensure current app directory is on sys.path for Streamlit Cloud ────────────
+# ── Ensure module files are importable regardless of how Streamlit Cloud mounts the repo ──
+# APP_DIR = the folder containing app.py (i.e. Streamlit_App/)
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-if APP_DIR not in sys.path:
-    sys.path.insert(0, APP_DIR)
+# REPO_ROOT = one level up from Streamlit_App/ (i.e. the repository root)
+REPO_ROOT = os.path.dirname(APP_DIR)
 
-# Modular application imports
-try:
-    from explainability import (
-        create_shap_explainer,
-        explain_prediction,
-        create_shap_bar_chart,
-        create_global_feature_importance_chart,
-        FEATURE_DISPLAY_NAMES
-    )
-    from recommendations import generate_retention_recommendations
-    from risk_scoring import compute_attrition_risk, categorize_risk
-except ImportError:
-    from Streamlit_App.explainability import (
-        create_shap_explainer,
-        explain_prediction,
-        create_shap_bar_chart,
-        create_global_feature_importance_chart,
-        FEATURE_DISPLAY_NAMES
-    )
-    from Streamlit_App.recommendations import generate_retention_recommendations
-    from Streamlit_App.risk_scoring import compute_attrition_risk, categorize_risk
+for _p in (APP_DIR, REPO_ROOT):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+# Modular application imports — always resolved via sys.path above
+from explainability import (
+    create_shap_explainer,
+    explain_prediction,
+    create_shap_bar_chart,
+    create_global_feature_importance_chart,
+    FEATURE_DISPLAY_NAMES
+)
+from recommendations import generate_retention_recommendations
+from risk_scoring import compute_attrition_risk, categorize_risk
 
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
