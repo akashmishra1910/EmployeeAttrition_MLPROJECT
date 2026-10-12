@@ -18,17 +18,35 @@ import joblib
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
+import os
+import sys
+
+# ── Ensure current app directory is on sys.path for Streamlit Cloud ────────────
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
 
 # Modular application imports
-from explainability import (
-    create_shap_explainer,
-    explain_prediction,
-    create_shap_bar_chart,
-    create_global_feature_importance_chart,
-    FEATURE_DISPLAY_NAMES
-)
-from recommendations import generate_retention_recommendations
-from risk_scoring import compute_attrition_risk, categorize_risk
+try:
+    from explainability import (
+        create_shap_explainer,
+        explain_prediction,
+        create_shap_bar_chart,
+        create_global_feature_importance_chart,
+        FEATURE_DISPLAY_NAMES
+    )
+    from recommendations import generate_retention_recommendations
+    from risk_scoring import compute_attrition_risk, categorize_risk
+except ImportError:
+    from Streamlit_App.explainability import (
+        create_shap_explainer,
+        explain_prediction,
+        create_shap_bar_chart,
+        create_global_feature_importance_chart,
+        FEATURE_DISPLAY_NAMES
+    )
+    from Streamlit_App.recommendations import generate_retention_recommendations
+    from Streamlit_App.risk_scoring import compute_attrition_risk, categorize_risk
 
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -262,28 +280,50 @@ footer {visibility: hidden;}
 # ── Load Model & Artifacts ────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Connecting to Analytics Engine...")
 def load_artifacts():
-    try:
-        model         = joblib.load("Model/attrition_model.pkl")
-        scaler        = joblib.load("Model/scaler.pkl")
-        encoders      = joblib.load("Model/encoders.pkl")
-        feature_names = joblib.load("Model/feature_names.pkl")
-    except Exception:
-        # Fallback to local path when running from subdirectories
-        model         = joblib.load("../Model/attrition_model.pkl")
-        scaler        = joblib.load("../Model/scaler.pkl")
-        encoders      = joblib.load("../Model/encoders.pkl")
-        feature_names = joblib.load("../Model/feature_names.pkl")
+    search_dirs = [
+        "Model",
+        "../Model",
+        os.path.join(APP_DIR, "Model"),
+        os.path.join(APP_DIR, "../Model"),
+    ]
+    model = None
+    for d in search_dirs:
+        p = os.path.join(d, "attrition_model.pkl")
+        if os.path.exists(p):
+            model         = joblib.load(p)
+            scaler        = joblib.load(os.path.join(d, "scaler.pkl"))
+            encoders      = joblib.load(os.path.join(d, "encoders.pkl"))
+            feature_names = joblib.load(os.path.join(d, "feature_names.pkl"))
+            break
+            
+    if model is None:
+        # Final fallback attempt
+        try:
+            model         = joblib.load("Model/attrition_model.pkl")
+            scaler        = joblib.load("Model/scaler.pkl")
+            encoders      = joblib.load("Model/encoders.pkl")
+            feature_names = joblib.load("Model/feature_names.pkl")
+        except Exception:
+            model         = joblib.load("../Model/attrition_model.pkl")
+            scaler        = joblib.load("../Model/scaler.pkl")
+            encoders      = joblib.load("../Model/encoders.pkl")
+            feature_names = joblib.load("../Model/feature_names.pkl")
         
     explainer = create_shap_explainer(model, feature_names)
     return model, scaler, encoders, feature_names, explainer
 
 @st.cache_data
 def load_dataset():
-    try:
-        df = pd.read_csv("Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv")
-    except Exception:
-        df = pd.read_csv("../Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv")
-    return df
+    search_paths = [
+        "Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv",
+        "../Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv",
+        os.path.join(APP_DIR, "Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv"),
+        os.path.join(APP_DIR, "../Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv"),
+    ]
+    for p in search_paths:
+        if os.path.exists(p):
+            return pd.read_csv(p)
+    return pd.read_csv("../Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv")
 
 try:
     model, scaler, encoders, feature_names, explainer = load_artifacts()

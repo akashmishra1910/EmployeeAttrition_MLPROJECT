@@ -11,7 +11,13 @@ Key Design Principles:
 5. Provides beautifully styled Plotly charts suited for a clean light-mode SaaS theme.
 """
 
-import shap
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    shap = None
+    SHAP_AVAILABLE = False
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -57,11 +63,17 @@ def create_shap_explainer(model, feature_names):
     """
     Creates a SHAP LinearExplainer for the Logistic Regression model.
     Uses Independent masker with zero baseline (since features are standard-scaled, mean=0).
+    Falls back gracefully to the raw model if SHAP is unavailable.
     """
-    baseline = np.zeros((1, len(feature_names)))
-    masker = shap.maskers.Independent(baseline)
-    explainer = shap.LinearExplainer(model, masker=masker)
-    return explainer
+    if not SHAP_AVAILABLE or shap is None:
+        return model
+    try:
+        baseline = np.zeros((1, len(feature_names)))
+        masker = shap.maskers.Independent(baseline)
+        explainer = shap.LinearExplainer(model, masker=masker)
+        return explainer
+    except Exception:
+        return model
 
 
 def explain_prediction(explainer, scaled_features, feature_names, top_k=5):
@@ -82,9 +94,15 @@ def explain_prediction(explainer, scaled_features, feature_names, top_k=5):
         - all_shap_df: full DataFrame sorted by absolute SHAP value
         - base_value: expected log-odds baseline
     """
-    shap_explanation = explainer(scaled_features)
-    shap_vals = shap_explanation.values[0]
-    base_val = float(shap_explanation.base_values[0])
+    if hasattr(explainer, "coef_"):
+        # Mathematically equivalent to SHAP linear explainer with zero baseline:
+        # phi_i = beta_i * x_i
+        shap_vals = explainer.coef_[0] * np.array(scaled_features)[0]
+        base_val = float(explainer.intercept_[0]) if hasattr(explainer, "intercept_") else 0.0
+    else:
+        shap_explanation = explainer(scaled_features)
+        shap_vals = shap_explanation.values[0]
+        base_val = float(shap_explanation.base_values[0])
     
     records = []
     for raw_name, val in zip(feature_names, shap_vals):
