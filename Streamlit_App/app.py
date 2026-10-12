@@ -5,15 +5,20 @@ import joblib
 import plotly.graph_objects as go
 from datetime import datetime
 
+# Import modular upgrades
+from explainability import create_shap_explainer, explain_prediction, create_shap_bar_chart
+from recommendations import generate_retention_recommendations
+from risk_scoring import compute_attrition_risk, categorize_risk
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Employee Attrition Intelligence",
+    page_title="Employee Retention Intelligence",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+# ── CSS (Preserves dark styling & clean readable input cards) ──────────────────
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] {
@@ -51,12 +56,12 @@ st.markdown("""
 ul[data-testid="stSelectboxVirtualDropdown"] li,
 ul[data-testid="stSelectboxVirtualDropdown"] li span { color: #0f172a !important; }
 
-/* Metric cards — white background, black text */
+/* Metric cards — white background, dark text */
 div[data-testid="metric-container"] {
     background: rgba(255,255,255,0.92);
     border: 1px solid rgba(56,138,220,0.3);
     border-radius: 14px;
-    padding: 18px 20px;
+    padding: 16px 18px;
 }
 div[data-testid="metric-container"] * { color: #000000 !important; }
 div[data-testid="metric-container"] label,
@@ -71,9 +76,9 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] p {
     color: #000000 !important; font-size: 22px !important; font-weight: 700 !important;
 }
 
-/* Buttons */
+/* Primary buttons */
 .stButton > button {
-    width: 100%; height: 52px; border-radius: 12px; border: none;
+    width: 100%; height: 50px; border-radius: 12px; border: none;
     background: linear-gradient(90deg, #1E6FD9, #0EA5E9);
     color: white; font-weight: 600; font-size: 16px; transition: opacity 0.2s;
 }
@@ -88,31 +93,43 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] p {
 }
 
 /* Recommendation cards */
-.rec-card  { background:rgba(30,111,217,0.12); border:1px solid rgba(30,111,217,0.25);  border-radius:10px; padding:12px 16px; margin-bottom:8px; color:#BAD4F7; font-size:14px; }
-.warn-card { background:rgba(239,159,39,0.12); border:1px solid rgba(239,159,39,0.25);  border-radius:10px; padding:12px 16px; margin-bottom:8px; color:#FCD580; font-size:14px; }
-.danger-card{background:rgba(226,75,74,0.12);  border:1px solid rgba(226,75,74,0.30);   border-radius:10px; padding:12px 16px; margin-bottom:8px; color:#FAAAA9; font-size:14px; }
+.rec-card   { background:rgba(30,111,217,0.12); border:1px solid rgba(30,111,217,0.25);  border-radius:10px; padding:12px 16px; margin-bottom:8px; color:#BAD4F7; font-size:14px; }
+.warn-card  { background:rgba(239,159,39,0.12); border:1px solid rgba(239,159,39,0.25);  border-radius:10px; padding:12px 16px; margin-bottom:8px; color:#FCD580; font-size:14px; }
+.danger-card{ background:rgba(226,75,74,0.12);  border:1px solid rgba(226,75,74,0.30);   border-radius:10px; padding:12px 16px; margin-bottom:8px; color:#FAAAA9; font-size:14px; }
 .success-card{background:rgba(99,153,34,0.12); border:1px solid rgba(99,153,34,0.30);   border-radius:10px; padding:12px 16px; margin-bottom:8px; color:#B4DD80; font-size:14px; }
 .model-badge{background:rgba(99,153,34,0.15);  border:1px solid rgba(99,153,34,0.35);   border-radius:8px;  padding:6px 14px; color:#B4DD80; font-size:13px; display:inline-block; margin-bottom:12px;}
+.info-card  {background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:12px 16px; margin-bottom:12px; font-size:13px; color:#CBD5E1;}
 
 footer{visibility:hidden;} #MainMenu{visibility:hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 # ── Load artifacts ─────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Loading model...")
+@st.cache_resource(show_spinner="Loading model & explainer...")
 def load_artifacts():
-    model         = joblib.load("Model/attrition_model.pkl")
+    model         = joblib.load("../Model/attrition_model.pkl") if False else joblib.load("Model/attrition_model.pkl")
     scaler        = joblib.load("Model/scaler.pkl")
     encoders      = joblib.load("Model/encoders.pkl")
     feature_names = joblib.load("Model/feature_names.pkl")
-    return model, scaler, encoders, feature_names
+    # Initialize SHAP explainer once and cache it
+    explainer     = create_shap_explainer(model, feature_names)
+    return model, scaler, encoders, feature_names, explainer
 
 try:
-    model, scaler, encoders, feature_names = load_artifacts()
+    model, scaler, encoders, feature_names, explainer = load_artifacts()
     model_loaded = True
 except Exception as e:
-    model_loaded = False
-    load_error   = str(e)
+    # Try relative fallback
+    try:
+        model         = joblib.load("../Model/attrition_model.pkl")
+        scaler        = joblib.load("../Model/scaler.pkl")
+        encoders      = joblib.load("../Model/encoders.pkl")
+        feature_names = joblib.load("../Model/feature_names.pkl")
+        explainer     = create_shap_explainer(model, feature_names)
+        model_loaded  = True
+    except Exception as e2:
+        model_loaded = False
+        load_error = str(e2)
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "history" not in st.session_state:
@@ -121,25 +138,25 @@ if "history" not in st.session_state:
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
-            border-radius:18px;padding:22px 28px;margin-bottom:24px;">
+            border-radius:18px;padding:22px 28px;margin-bottom:20px;">
     <p style="color:#64748B;font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin:0 0 4px">
         Developed by Akash Mishra
     </p>
     <h1 style="color:white;margin:0;font-size:26px;font-weight:700;">
-        📊 Employee Attrition Intelligence Platform
+        📊 Employee Retention Intelligence Platform
     </h1>
-    <p style="color:#94A3B8;margin:6px 0 0;font-size:15px;">
-        Predict employee turnover risk using Logistic Regression — optimized for high recall and balanced with SMOTE.
+    <p style="color:#94A3B8;margin:6px 0 0;font-size:14px;">
+        Predict attrition flight risk, explain predictions with SHAP attribution, and simulate proactive retention actions.
     </p>
 </div>
 """, unsafe_allow_html=True)
 
 if not model_loaded:
     st.error(f"⚠️ Could not load model files: {load_error}")
-    st.info("Ensure `attrition_model.pkl`, `scaler.pkl`, `encoders.pkl`, and `feature_names.pkl` exist in `../-Model/`.")
+    st.info("Ensure `attrition_model.pkl`, `scaler.pkl`, `encoders.pkl`, and `feature_names.pkl` exist in `Model/`.")
     st.stop()
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ── Sidebar Inputs ────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 👤 Employee Profile")
 
@@ -156,110 +173,88 @@ with st.sidebar:
     overtime        = st.selectbox("Overtime",         encoders["OverTime"].classes_)
 
     st.markdown('<p class="section-header">Compensation & Satisfaction</p>', unsafe_allow_html=True)
-    monthly_income           = st.slider("Monthly Income (₹)",          1000, 50000, 5000, step=500)
-    job_satisfaction         = st.slider("Job Satisfaction (1–4)",       1, 4, 3)
-    environment_satisfaction = st.slider("Environment Satisfaction (1–4)",1, 4, 3)
-    stock_option_level       = st.slider("Stock Option Level (0–3)",     0, 3, 1)
+    monthly_income           = st.slider("Monthly Income (₹)",           1000, 50000, 5000, step=500)
+    job_satisfaction         = st.slider("Job Satisfaction (1–4)",        1, 4, 3)
+    environment_satisfaction = st.slider("Environment Satisfaction (1–4)", 1, 4, 3)
+    work_life_balance        = st.slider("Work-Life Balance (1–4)",       1, 4, 3)
+    stock_option_level       = st.slider("Stock Option Level (0–3)",      0, 3, 1)
 
     st.markdown('<p class="section-header">Career & Tenure</p>', unsafe_allow_html=True)
-    job_level           = st.slider("Job Level (1–5)",          1, 5, 2)
-    total_working_years = st.slider("Total Working Years",      0, 40, 8)
-    years_at_company    = st.slider("Years at Company",         0, 40, 5)
-    distance_from_home  = st.slider("Distance from Home (km)", 1, 30, 5)
+    job_level                  = st.slider("Job Level (1–5)",           1, 5, 2)
+    total_working_years        = st.slider("Total Working Years",       0, 40, 8)
+    years_at_company           = st.slider("Years at Company",          0, 40, 5)
+    years_since_last_promotion = st.slider("Years Since Last Promotion",0, 15, 1)
+    distance_from_home         = st.slider("Distance from Home (km)",   1, 30, 5)
 
-    predict_clicked = st.button("🚀 Predict Attrition Risk")
+    predict_clicked = st.button("🚀 Predict & Explain Risk")
 
-# ── Feature builder — must match notebook column order exactly ────────────────
-def build_features() -> pd.DataFrame:
+# ── Feature Builder ───────────────────────────────────────────────────────────
+def build_features_from_dict(raw_data) -> pd.DataFrame:
     """
-    Constructs a single-row DataFrame with all features in the exact
-    order the scaler was fitted on during training.
+    Constructs a DataFrame matching the exact feature order of feature_names.pkl.
     """
     row = {
-        "Age":                      age,
-        "BusinessTravel":           encoders["BusinessTravel"].transform([business_travel])[0],
+        "Age":                      raw_data["Age"],
+        "BusinessTravel":           encoders["BusinessTravel"].transform([raw_data["BusinessTravel"]])[0],
         "DailyRate":                800,           # median default
-        "Department":               encoders["Department"].transform([department])[0],
-        "DistanceFromHome":         distance_from_home,
+        "Department":               encoders["Department"].transform([raw_data["Department"]])[0],
+        "DistanceFromHome":         raw_data["DistanceFromHome"],
         "Education":                3,             # median default
-        "EducationField":           encoders["EducationField"].transform([education_field])[0],
-        "EnvironmentSatisfaction":  environment_satisfaction,
-        "Gender":                   encoders["Gender"].transform([gender])[0],
+        "EducationField":           encoders["EducationField"].transform([raw_data["EducationField"]])[0],
+        "EnvironmentSatisfaction":  raw_data["EnvironmentSatisfaction"],
+        "Gender":                   encoders["Gender"].transform([raw_data["Gender"]])[0],
         "HourlyRate":               65,            # median default
         "JobInvolvement":           3,             # median default
-        "JobLevel":                 job_level,
-        "JobRole":                  encoders["JobRole"].transform([job_role])[0],
-        "JobSatisfaction":          job_satisfaction,
-        "MaritalStatus":            encoders["MaritalStatus"].transform([marital_status])[0],
-        "MonthlyIncome":            monthly_income,
+        "JobLevel":                 raw_data["JobLevel"],
+        "JobRole":                  encoders["JobRole"].transform([raw_data["JobRole"]])[0],
+        "JobSatisfaction":          raw_data["JobSatisfaction"],
+        "MaritalStatus":            encoders["MaritalStatus"].transform([raw_data["MaritalStatus"]])[0],
+        "MonthlyIncome":            raw_data["MonthlyIncome"],
         "MonthlyRate":              14000,         # median default
         "NumCompaniesWorked":       2,             # median default
-        "OverTime":                 encoders["OverTime"].transform([overtime])[0],
+        "OverTime":                 encoders["OverTime"].transform([raw_data["OverTime"]])[0],
         "PercentSalaryHike":        15,            # median default
         "PerformanceRating":        3,             # median default
         "RelationshipSatisfaction": 3,             # median default
-        "StockOptionLevel":         stock_option_level,
-        "TotalWorkingYears":        total_working_years,
+        "StockOptionLevel":         raw_data["StockOptionLevel"],
+        "TotalWorkingYears":        raw_data["TotalWorkingYears"],
         "TrainingTimesLastYear":    2,             # median default
-        "WorkLifeBalance":          3,             # median default
-        "YearsAtCompany":           years_at_company,
+        "WorkLifeBalance":          raw_data.get("WorkLifeBalance", 3),
+        "YearsAtCompany":           raw_data["YearsAtCompany"],
         "YearsInCurrentRole":       3,             # median default
-        "YearsSinceLastPromotion":  1,             # median default
+        "YearsSinceLastPromotion":  raw_data.get("YearsSinceLastPromotion", 1),
         "YearsWithCurrManager":     3,             # median default
         # Engineered features
-        "IncomePerYear":            monthly_income * 12,
-        "ExperienceRatio":          years_at_company / (total_working_years + 1),
+        "IncomePerYear":            raw_data["MonthlyIncome"] * 12,
+        "ExperienceRatio":          raw_data["YearsAtCompany"] / (raw_data["TotalWorkingYears"] + 1),
     }
-    # Reorder to match training column order
     df = pd.DataFrame([row])
-    df = df[feature_names]
-    return df
+    return df[feature_names]
 
-# ── Per-input risk contributions (heuristic) ──────────────────────────────────
-def compute_input_factors():
-    factors = {}
-    factors["Monthly income"]         = round(max(0, 1 - monthly_income / 25000) * 100)
-    factors["Overtime"]               = 90 if overtime == "Yes" else 10
-    factors["Job satisfaction"]       = round((4 - job_satisfaction) / 3 * 100)
-    factors["Env. satisfaction"]      = round((4 - environment_satisfaction) / 3 * 100)
-    factors["Distance from home"]     = round(min(1, distance_from_home / 30) * 100)
-    factors["Stock options"]          = round((3 - stock_option_level) / 3 * 100)
-    travel_map = {"Travel_Frequently": 100, "Travel_Rarely": 40, "Non-Travel": 0}
-    factors["Business travel"]        = travel_map.get(business_travel, 0)
-    marital_map = {"Single": 100, "Divorced": 40, "Married": 5}
-    factors["Marital status risk"]    = marital_map.get(marital_status, 5)
-    factors["Short tenure"]           = round(max(0, 1 - years_at_company / 15) * 100)
-    factors["Early career"]           = round(max(0, 1 - total_working_years / 20) * 100)
-    return dict(sorted(factors.items(), key=lambda x: -x[1]))
+# Raw inputs dictionary for current employee
+current_employee = {
+    "Age": age,
+    "Gender": gender,
+    "MaritalStatus": marital_status,
+    "Department": department,
+    "JobRole": job_role,
+    "EducationField": education_field,
+    "BusinessTravel": business_travel,
+    "OverTime": overtime,
+    "MonthlyIncome": monthly_income,
+    "JobSatisfaction": job_satisfaction,
+    "EnvironmentSatisfaction": environment_satisfaction,
+    "WorkLifeBalance": work_life_balance,
+    "StockOptionLevel": stock_option_level,
+    "JobLevel": job_level,
+    "TotalWorkingYears": total_working_years,
+    "YearsAtCompany": years_at_company,
+    "YearsSinceLastPromotion": years_since_last_promotion,
+    "DistanceFromHome": distance_from_home,
+}
 
-# ── Recommendations ───────────────────────────────────────────────────────────
-def get_recommendations(risk_score):
-    recs = []
-    if overtime == "Yes":
-        recs.append(("⚠️", "warn",    "Reduce overtime — it is a primary predictor of attrition."))
-    if monthly_income < 6000:
-        recs.append(("💰", "danger",  "Review compensation — income is significantly below the retention threshold."))
-    if distance_from_home > 15:
-        recs.append(("🏠", "warn",    "Offer hybrid or remote work to ease commute burden."))
-    if job_satisfaction < 2:
-        recs.append(("😟", "danger",  "Low job satisfaction — consider role redesign or growth pathways."))
-    if environment_satisfaction < 2:
-        recs.append(("🏢", "warn",    "Poor environment satisfaction — run a team culture audit."))
-    if stock_option_level == 0:
-        recs.append(("📈", "rec",     "Introduce stock or profit-sharing to build long-term commitment."))
-    if business_travel == "Travel_Frequently":
-        recs.append(("✈️", "warn",    "Frequent travel is a strong attrition driver — review the travel policy."))
-    if marital_status == "Single" and risk_score > 40:
-        recs.append(("👤", "rec",     "Single employees at elevated risk — consider mentorship or team-building programs."))
-    if years_at_company < 2:
-        recs.append(("📅", "warn",    "Low tenure — strengthen onboarding and 90-day check-ins."))
-    if not recs:
-        recs.append(("✅", "success", "No major retention concerns detected. Keep up current engagement practices."))
-    return recs
-
-# ── Plotly charts ─────────────────────────────────────────────────────────────
-def gauge_chart(score):
-    color = "#639922" if score < 30 else "#EF9F27" if score < 50 else "#E24B4A"
+# ── Visualization Helpers ─────────────────────────────────────────────────────
+def gauge_chart(score, color):
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=score,
@@ -270,16 +265,16 @@ def gauge_chart(score):
             "bgcolor": "rgba(255,255,255,0.04)",
             "bordercolor": "rgba(255,255,255,0.08)",
             "steps": [
-                {"range": [0,  30],  "color": "rgba(99,153,34,0.10)"},
-                {"range": [30, 50],  "color": "rgba(239,159,39,0.10)"},
-                {"range": [50, 100], "color": "rgba(226,75,74,0.10)"},
+                {"range": [0,  30],  "color": "rgba(99,153,34,0.12)"},
+                {"range": [30, 60],  "color": "rgba(239,159,39,0.12)"},
+                {"range": [60, 100], "color": "rgba(226,75,74,0.12)"},
             ],
             "threshold": {"line": {"color": color, "width": 3}, "thickness": 0.85, "value": score},
         },
     ))
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(t=20, b=10, l=20, r=20), height=240, font={"color": "white"},
+        margin=dict(t=20, b=10, l=20, r=20), height=230, font={"color": "white"},
     )
     return fig
 
@@ -291,205 +286,387 @@ def donut_chart(stay_pct, leave_pct):
     ))
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", showlegend=False,
-        margin=dict(t=10, b=10, l=10, r=10), height=230,
+        margin=dict(t=10, b=10, l=10, r=10), height=220,
     )
     return fig
 
-def factor_bar_chart(factors):
-    labels = list(factors.keys())
-    values = list(factors.values())
-    colors = ["#E24B4A" if v >= 70 else "#EF9F27" if v >= 40 else "#378ADD" for v in values]
-    fig = go.Figure(go.Bar(
-        x=values, y=labels, orientation="h",
-        marker=dict(color=colors, cornerradius=4),
-        text=[f"{v}%" for v in values], textposition="outside",
-        textfont=dict(color="white", size=11),
-    ))
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(range=[0, 120], showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(tickfont=dict(color="#94A3B8", size=11)),
-        margin=dict(t=4, b=4, l=10, r=50), height=300, bargap=0.32,
-    )
-    return fig
+# ── Tabbed Dashboard Layout ───────────────────────────────────────────────────
+tab_predict, tab_whatif, tab_batch = st.tabs([
+    "🎯 Individual Prediction & SHAP",
+    "🧪 What-If Risk Simulation",
+    "👥 Ranked Employee Overview"
+])
 
-def benchmark_chart(current_income):
-    bands  = ["<₹3k", "₹3–6k", "₹6–10k", "₹10–20k", ">₹20k"]
-    avg    = [72, 55, 38, 22, 12]
-    colors = ["#E24B4A", "#EF9F27", "#BA7517", "#378ADD", "#639922"]
-    hi = 0 if current_income < 3000 else 1 if current_income < 6000 else \
-         2 if current_income < 10000 else 3 if current_income < 20000 else 4
-    border = ["rgba(255,255,255,0.8)" if i == hi else "rgba(0,0,0,0)" for i in range(5)]
-    fig = go.Figure(go.Bar(
-        x=bands, y=avg,
-        marker=dict(color=colors, line=dict(color=border, width=2), cornerradius=5),
-        text=[f"{v}%" for v in avg], textposition="outside",
-        textfont=dict(color="white", size=12),
-    ))
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(tickfont=dict(color="#94A3B8", size=12), showgrid=False),
-        yaxis=dict(range=[0, 90], tickfont=dict(color="#64748B", size=11),
-                   gridcolor="rgba(255,255,255,0.06)", ticksuffix="%"),
-        margin=dict(t=8, b=4, l=10, r=10), height=220,
-    )
-    return fig
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1: INDIVIDUAL PREDICTION & SHAP EXPLAINABILITY
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_predict:
+    col_left, col_right = st.columns([3, 2], gap="large")
 
-# ── Main layout ───────────────────────────────────────────────────────────────
-col_left, col_right = st.columns([3, 2], gap="large")
+    with col_left:
+        # Top Quick Profile Metric Cards
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Monthly Income",  f"₹{monthly_income:,}")
+        m2.metric("Department",      department[:14])
+        m3.metric("Distance",        f"{distance_from_home} km")
+        m4.metric("Overtime",        overtime)
 
-# ─── LEFT COLUMN ─────────────────────────────────────────────────────────────
-with col_left:
+        st.markdown("---")
 
-    # Top metrics
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Monthly income",  f"₹{monthly_income:,}")
-    m2.metric("Department",      department[:14])
-    m3.metric("Distance",        f"{distance_from_home} km")
-    m4.metric("Overtime",        overtime)
+        # Execute prediction when clicked or show stored results
+        if predict_clicked or "last_prediction" in st.session_state:
+            if predict_clicked:
+                X_df = build_features_from_dict(current_employee)
+                X_scaled = scaler.transform(X_df)
+                
+                # Safe probability extraction using classes_
+                proba = model.predict_proba(X_scaled)[0]
+                risk_score, stay_pct = compute_attrition_risk(proba, model.classes_)
+                risk_info = categorize_risk(risk_score)
+                pred_label = "Leave" if risk_score >= 50.0 else "Stay"
+                
+                # SHAP explanation
+                shap_result = explain_prediction(explainer, X_scaled, feature_names, top_k=5)
+                
+                # Recommendations
+                recs = generate_retention_recommendations(current_employee)
+                
+                # Store in session
+                st.session_state.last_prediction = {
+                    "risk_score": risk_score,
+                    "stay_pct": stay_pct,
+                    "risk_info": risk_info,
+                    "pred_label": pred_label,
+                    "shap_result": shap_result,
+                    "recs": recs,
+                    "employee": current_employee.copy(),
+                }
+                
+                # Save into history
+                st.session_state.history.insert(0, {
+                    "Time": datetime.now().strftime("%H:%M:%S"),
+                    "Role": job_role,
+                    "Department": department,
+                    "Risk Score": int(risk_score),
+                    "Level": risk_info["label"],
+                    "Prediction": pred_label,
+                })
 
-    st.markdown("---")
+            res = st.session_state.last_prediction
+            r_info = res["risk_info"]
 
-    # ── Prediction block ──────────────────────────────────────────────────────
-    if predict_clicked:
-        with st.spinner("Running Logistic Regression prediction..."):
-            X_input   = build_features()
-            X_scaled  = scaler.transform(X_input)
-            pred      = model.predict(X_scaled)[0]
-            proba     = model.predict_proba(X_scaled)[0]
-            risk_score = round(float(proba[1]) * 100, 1)
-            stay_pct   = round(float(proba[0]) * 100, 1)
+            # 1. Prediction Overview Cards
+            ga, gb = st.columns(2, gap="medium")
+            with ga:
+                st.markdown(f"### {r_info['label']}")
+                st.caption(r_info["verdict"])
+                st.plotly_chart(gauge_chart(res["risk_score"], r_info["color"]),
+                                use_container_width=True, config={"displayModeBar": False})
+            with gb:
+                st.caption("Probability breakdown — Stay vs Leave")
+                st.plotly_chart(donut_chart(res["stay_pct"], res["risk_score"]),
+                                use_container_width=True, config={"displayModeBar": False})
+                st.markdown(f"""
+                <div style="display:flex;gap:12px;justify-content:center;margin-top:2px">
+                    <span style="color:#B4DD80;font-size:13px">● Stay {res['stay_pct']}%</span>
+                    <span style="color:#FAAAA9;font-size:13px">● Leave {res['risk_score']}%</span>
+                </div>
+                """, unsafe_allow_html=True)
 
-        # Risk level - Calibrated for Logistic Regression
-        if risk_score < 30:
-            level   = "🟢 LOW RISK"
-            verdict = "Employee shows strong retention signals."
-        elif risk_score < 50:
-            level   = "🟡 MEDIUM RISK"
-            verdict = "Moderate flight risk — address the highlighted factors."
-        else:
-            level   = "🔴 HIGH RISK"
-            verdict = "High flight risk — immediate intervention recommended."
+            dm1, dm2, dm3, dm4 = st.columns(4)
+            dm1.metric("Attrition Risk", f"{res['risk_score']}%")
+            dm2.metric("Prediction", f"{res['pred_label']} {'⚠️' if res['pred_label'] == 'Leave' else '✅'}")
+            dm3.metric("Retention Prob.", f"{res['stay_pct']}%")
+            dm4.metric("Risk Tier", r_info["tier"])
 
-        # Save to history
-        st.session_state.history.insert(0, {
-            "Time":       datetime.now().strftime("%H:%M:%S"),
-            "Role":       job_role,
-            "Department": department,
-            "Risk Score": int(risk_score),
-            "Level":      level,
-            "Prediction": "Leave" if pred == 1 else "Stay",
-        })
+            st.markdown("---")
 
-        # Gauge + donut side by side
-        ga, gb = st.columns(2, gap="medium")
-        with ga:
-            st.markdown(f"### {level}")
-            st.caption(verdict)
-            st.plotly_chart(gauge_chart(risk_score), use_container_width=True,
-                            config={"displayModeBar": False})
-        with gb:
-            st.caption("Probability breakdown — Stay vs Leave")
-            st.plotly_chart(donut_chart(stay_pct, risk_score),
-                            use_container_width=True, config={"displayModeBar": False})
-            st.markdown(f"""
-            <div style="display:flex;gap:10px;justify-content:center;margin-top:4px">
-                <span style="color:#B4DD80;font-size:13px">● Stay {stay_pct}%</span>
-                <span style="color:#FAAAA9;font-size:13px">● Leave {risk_score}%</span>
+            # 2. FEATURE 1: SHAP EXPLAINABILITY SECTION
+            st.markdown("### 🔍 Model Explainability (SHAP Attribution)")
+            st.markdown("""
+            <div class="info-card">
+                <b>What does this show?</b> SHAP (SHapley Additive exPlanations) explains <i>why</i> the Logistic Regression model made this specific prediction.
+                <br>• <span style="color:#FAAAA9;"><b>Positive values (Red)</b></span> push the model output toward <b>Attrition</b>.
+                <br>• <span style="color:#B4DD80;"><b>Negative values (Green)</b></span> push the model output toward <b>Retention (Staying)</b>.
+                <br><i>Note: SHAP values represent statistical attribution in log-odds space, not guaranteed causal causes.</i>
             </div>
             """, unsafe_allow_html=True)
 
-        # Detailed metrics row
-        st.markdown("---")
-        dm1, dm2, dm3, dm4 = st.columns(4)
-        dm1.metric("Risk Score",   f"{risk_score}%")
-        dm2.metric("Prediction",   "Leave ⚠️" if pred == 1 else "Stay ✅")
-        dm3.metric("Stay Prob.",   f"{stay_pct}%")
-        dm4.metric("Predictions",  len(st.session_state.history))
+            # SHAP Bar Chart
+            shap_fig = create_shap_bar_chart(res["shap_result"]["top_features"])
+            st.plotly_chart(shap_fig, use_container_width=True, config={"displayModeBar": False})
 
-        # Recommendations
-        st.markdown("### 🎯 Retention recommendations")
-        card_map = {"warn": "warn-card", "danger": "danger-card",
-                    "rec": "rec-card", "success": "success-card"}
-        for icon, kind, text in get_recommendations(risk_score):
-            st.markdown(f'<div class="{card_map[kind]}">{icon} {text}</div>',
-                        unsafe_allow_html=True)
+            # Top Factors Bullet Points
+            st.markdown("#### 📌 Key Influential Factors for this Employee:")
+            for item in res["shap_result"]["top_features"]:
+                icon = "🔺" if item["PushesToward"] == "Leave" else "🔻"
+                color = "#FAAAA9" if item["PushesToward"] == "Leave" else "#B4DD80"
+                st.markdown(
+                    f"- **{item['Feature']}**: {icon} <span style='color:{color};'>{item['Direction']}</span> "
+                    f"`(Impact: {item['SHAPValue']:+.3f} log-odds)`",
+                    unsafe_allow_html=True
+                )
 
-    else:
-        # Placeholder before first prediction
+            # Detailed SHAP Table Expander
+            with st.expander("🔎 View Complete Feature Attribution Table"):
+                st.dataframe(
+                    res["shap_result"]["all_shap_df"][["Feature", "SHAPValue", "PushesToward"]],
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            st.markdown("---")
+
+            # 3. FEATURE 3: RETENTION RECOMMENDATIONS SECTION
+            st.markdown("### 💡 Tailored Retention Recommendations")
+            st.caption("Transparent, rule-based workplace suggestions to support employee engagement.")
+            card_styles = {"danger": "danger-card", "warning": "warn-card", "info": "rec-card", "success": "success-card"}
+            for rec in res["recs"]:
+                cls = card_styles.get(rec["level"], "rec-card")
+                st.markdown(f"""
+                <div class="{cls}">
+                    <b>{rec['icon']} {rec['title']}</b> <i>({rec['category']})</i><br>
+                    {rec['action']}
+                </div>
+                """, unsafe_allow_html=True)
+
+        else:
+            st.markdown("""
+            <div style="text-align:center;padding:56px 0;color:#475569;">
+                <p style="font-size:48px;margin-bottom:12px">📊</p>
+                <p style="font-size:17px;font-weight:600;color:#94A3B8;">Ready for Employee Assessment</p>
+                <p style="font-size:14px;color:#64748B;max-width:360px;margin:8px auto 0">
+                    Adjust employee attributes on the left and click
+                    <strong style="color:#60A5FA">Predict & Explain Risk</strong>.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with col_right:
+        # Model info badge
         st.markdown("""
-        <div style="text-align:center;padding:56px 0;color:#475569;">
-            <p style="font-size:48px;margin-bottom:12px">📊</p>
-            <p style="font-size:17px;font-weight:600;color:#94A3B8;">Ready to predict</p>
-            <p style="font-size:14px;color:#64748B;max-width:320px;margin:8px auto 0">
-                Fill in the employee details in the sidebar and click
-                <strong style="color:#60A5FA">Predict Attrition Risk</strong>.
+        <div class="model-badge">
+            ✅ Model: Logistic Regression · SMOTE Resampled · Recall Optimized
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Employee snapshot table
+        st.markdown("### 👤 Employee Snapshot")
+        snap = pd.DataFrame({
+            "Field": ["Age", "Gender", "Marital Status", "Department", "Job Role",
+                      "Education Field", "Business Travel", "Overtime", "Monthly Income",
+                      "Job Satisfaction", "Work Environment", "Work-Life Balance",
+                      "Job Level", "Stock Options", "Total Experience", "Tenure"],
+            "Value": [age, gender, marital_status, department, job_role,
+                      education_field, business_travel, overtime, f"₹{monthly_income:,}",
+                      f"{job_satisfaction}/4", f"{environment_satisfaction}/4", f"{work_life_balance}/4",
+                      job_level, stock_option_level,
+                      f"{total_working_years} yrs", f"{years_at_company} yrs"],
+        })
+        st.dataframe(snap, hide_index=True, use_container_width=True)
+
+        st.markdown("---")
+
+        # Prediction History Table
+        st.markdown("### 🕐 Recent Assessment History")
+        if not st.session_state.history:
+            st.caption("No assessments run in this session.")
+        else:
+            df_hist = pd.DataFrame(st.session_state.history)
+            df_hist.index = range(1, len(df_hist) + 1)
+            st.dataframe(
+                df_hist,
+                use_container_width=True,
+                column_config={
+                    "Risk Score": st.column_config.ProgressColumn(
+                        "Risk Score", min_value=0, max_value=100, format="%d%%"
+                    )
+                },
+            )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2: FEATURE 4 - WHAT-IF RISK SIMULATION
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_whatif:
+    st.markdown("### 🧪 What-If Risk Simulation (Hypothetical Scenarios)")
+    st.markdown("""
+    <div class="info-card">
+        Simulate how modifying workplace levers (such as eliminating overtime, improving job satisfaction, or adjusting compensation)
+        impacts the model's estimated attrition probability.
+        <br><i>Important: This is a statistical model-based simulation to explore sensitivity, not a guarantee of behavioral change.</i>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Base profile prediction
+    base_df = build_features_from_dict(current_employee)
+    base_scaled = scaler.transform(base_df)
+    base_prob = model.predict_proba(base_scaled)[0]
+    base_risk, _ = compute_attrition_risk(base_prob, model.classes_)
+    base_tier = categorize_risk(base_risk)
+
+    sim_col1, sim_col2 = st.columns([1, 1], gap="large")
+
+    with sim_col1:
+        st.markdown("#### 🛠️ Adjust Hypothetical Workplace Levers")
+        
+        sim_overtime = st.selectbox(
+            "Hypothetical Overtime:",
+            options=["No", "Yes"],
+            index=0 if overtime == "No" else 1,
+            key="sim_ot"
+        )
+        sim_job_sat = st.slider(
+            "Hypothetical Job Satisfaction (1-4):",
+            min_value=1, max_value=4, value=job_satisfaction,
+            key="sim_js"
+        )
+        sim_env_sat = st.slider(
+            "Hypothetical Environment Satisfaction (1-4):",
+            min_value=1, max_value=4, value=environment_satisfaction,
+            key="sim_es"
+        )
+        sim_income = st.slider(
+            "Hypothetical Monthly Income (₹):",
+            min_value=1000, max_value=50000, value=monthly_income, step=500,
+            key="sim_inc"
+        )
+        sim_wlb = st.slider(
+            "Hypothetical Work-Life Balance (1-4):",
+            min_value=1, max_value=4, value=work_life_balance,
+            key="sim_wlb"
+        )
+        sim_promo = st.slider(
+            "Hypothetical Years Since Last Promotion:",
+            min_value=0, max_value=15, value=years_since_last_promotion,
+            key="sim_pr"
+        )
+
+    # Construct hypothetical copy
+    hypothetical_employee = current_employee.copy()
+    hypothetical_employee["OverTime"] = sim_overtime
+    hypothetical_employee["JobSatisfaction"] = sim_job_sat
+    hypothetical_employee["EnvironmentSatisfaction"] = sim_env_sat
+    hypothetical_employee["MonthlyIncome"] = sim_income
+    hypothetical_employee["WorkLifeBalance"] = sim_wlb
+    hypothetical_employee["YearsSinceLastPromotion"] = sim_promo
+
+    # Compute simulation output
+    sim_df = build_features_from_dict(hypothetical_employee)
+    sim_scaled = scaler.transform(sim_df)
+    sim_prob = model.predict_proba(sim_scaled)[0]
+    sim_risk, _ = compute_attrition_risk(sim_prob, model.classes_)
+    sim_tier = categorize_risk(sim_risk)
+    
+    diff = round(sim_risk - base_risk, 1)
+
+    with sim_col2:
+        st.markdown("#### 📊 Simulation Impact Comparison")
+        
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.metric("Original Risk", f"{base_risk}%", delta=None)
+        sc2.metric("Simulated Risk", f"{sim_risk}%", delta=f"{diff}%", delta_color="inverse")
+        sc3.metric("Change", f"{diff:+0.1f}% pts")
+
+        st.markdown(f"""
+        <div style="background:rgba(255,255,255,0.04);border-radius:12px;padding:16px;border:1px solid rgba(255,255,255,0.1);margin-top:10px;">
+            <p style="margin:0 0 6px;color:#94A3B8;font-size:13px;">Original Risk Tier: <b>{base_tier['label']}</b></p>
+            <p style="margin:0 0 10px;color:#94A3B8;font-size:13px;">Simulated Risk Tier: <b>{sim_tier['label']}</b></p>
+            <p style="margin:0;font-size:14px;color: {'#B4DD80' if diff < 0 else '#FAAAA9' if diff > 0 else '#CBD5E1'};">
+                <b>Analysis:</b> The hypothetical changes resulted in a <b>{abs(diff)}% {'reduction' if diff < 0 else 'increase' if diff > 0 else 'no change'}</b> in predicted attrition risk.
             </p>
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("---")
-
-    # Benchmark chart — always visible
-    st.markdown("### 📊 Attrition risk by income band — benchmark")
-    st.caption("Highlighted bar = current employee's income band.")
-    st.plotly_chart(benchmark_chart(monthly_income), use_container_width=True,
-                    config={"displayModeBar": False})
-
-    # History table — always visible
-    st.markdown("### 🕐 Prediction history")
-    if not st.session_state.history:
-        st.caption("No predictions yet.")
-    else:
-        df_hist = pd.DataFrame(st.session_state.history)
-        df_hist.index = range(1, len(df_hist) + 1)
-        st.dataframe(
-            df_hist,
-            use_container_width=True,
-            column_config={
-                "Risk Score": st.column_config.ProgressColumn(
-                    "Risk Score", min_value=0, max_value=100, format="%d%%"
-                )
-            },
+        # Comparison Bar Chart
+        comp_fig = go.Figure(data=[
+            go.Bar(name="Original Scenario", x=["Attrition Risk"], y=[base_risk],
+                   marker_color=base_tier["color"], text=[f"{base_risk}%"], textposition="auto"),
+            go.Bar(name="Simulated Scenario", x=["Attrition Risk"], y=[sim_risk],
+                   marker_color=sim_tier["color"], text=[f"{sim_risk}%"], textposition="auto")
+        ])
+        comp_fig.update_layout(
+            barmode="group",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(range=[0, 100], title="Predicted Risk (%)", gridcolor="rgba(255,255,255,0.06)", tickfont=dict(color="#94A3B8")),
+            xaxis=dict(tickfont=dict(color="white")),
+            legend=dict(font=dict(color="white")),
+            height=260,
+            margin=dict(t=20, b=20, l=10, r=10)
         )
+        st.plotly_chart(comp_fig, use_container_width=True, config={"displayModeBar": False})
 
-# ─── RIGHT COLUMN ─────────────────────────────────────────────────────────────
-with col_right:
-
-    # Model info badge
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3: RANKED EMPLOYEE OVERVIEW (BATCH TRIAGE)
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_batch:
+    st.markdown("### 👥 Workforce Flight Risk Overview & Ranking")
     st.markdown("""
-    <div class="model-badge">
-        ✅ Model: Logistic Regression · SMOTE balanced · Optimized for High Recall
+    <div class="info-card">
+        Demonstrates cohort-level risk triage using the dataset test records. Allows HR managers to prioritize retention conversations for high-risk cohorts without exposing sensitive identities.
     </div>
     """, unsafe_allow_html=True)
 
-    # Input-driven risk factors
-    st.markdown("### 🎯 Input risk factor breakdown")
-    st.caption("Heuristic contribution of each input to overall attrition risk.")
-    factors = compute_input_factors()
-    st.plotly_chart(factor_bar_chart(factors), use_container_width=True,
-                    config={"displayModeBar": False})
+    @st.cache_data
+    def load_cohort_sample():
+        try:
+            df_raw = pd.read_csv("Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv").sample(n=60, random_state=42)
+        except Exception:
+            df_raw = pd.read_csv("../Dataset/WA_Fn-UseC_-HR-Employee-Attrition.csv").sample(n=60, random_state=42)
+            
+        records = []
+        for i, r in df_raw.iterrows():
+            item = {
+                "Age": r["Age"], "Gender": r["Gender"], "MaritalStatus": r["MaritalStatus"],
+                "Department": r["Department"], "JobRole": r["JobRole"], "EducationField": r["EducationField"],
+                "BusinessTravel": r["BusinessTravel"], "OverTime": r["OverTime"], "MonthlyIncome": r["MonthlyIncome"],
+                "JobSatisfaction": r["JobSatisfaction"], "EnvironmentSatisfaction": r["EnvironmentSatisfaction"],
+                "WorkLifeBalance": r.get("WorkLifeBalance", 3), "StockOptionLevel": r["StockOptionLevel"],
+                "JobLevel": r["JobLevel"], "TotalWorkingYears": r["TotalWorkingYears"],
+                "YearsAtCompany": r["YearsAtCompany"], "YearsSinceLastPromotion": r.get("YearsSinceLastPromotion", 1),
+                "DistanceFromHome": r["DistanceFromHome"]
+            }
+            f_df = build_features_from_dict(item)
+            s_scaled = scaler.transform(f_df)
+            prob = model.predict_proba(s_scaled)[0]
+            risk, _ = compute_attrition_risk(prob, model.classes_)
+            tier = categorize_risk(risk)
+            records.append({
+                "Employee ID": f"EMP-{r['EmployeeNumber']}",
+                "Department": r["Department"],
+                "Job Role": r["JobRole"],
+                "Overtime": r["OverTime"],
+                "Tenure (Yrs)": r["YearsAtCompany"],
+                "Monthly Income": f"₹{r['MonthlyIncome']:,}",
+                "Risk Score": risk,
+                "Risk Category": tier["label"],
+            })
+        return pd.DataFrame(records).sort_values(by="Risk Score", ascending=False).reset_index(drop=True)
 
-    st.markdown("---")
+    df_cohort = load_cohort_sample()
+    
+    col_f1, col_f2 = st.columns([1, 2])
+    with col_f1:
+        dept_filter = st.multiselect("Filter by Department:", options=list(df_cohort["Department"].unique()), default=[])
+    
+    filtered_df = df_cohort[df_cohort["Department"].isin(dept_filter)] if dept_filter else df_cohort
 
-    # Employee snapshot
-    st.markdown("### 👤 Employee snapshot")
-    snap = pd.DataFrame({
-        "Field": ["Age", "Gender", "Marital status", "Department", "Job role",
-                  "Education field", "Business travel", "Overtime",
-                  "Job level", "Stock options", "Total experience", "Tenure"],
-        "Value": [age, gender, marital_status, department, job_role,
-                  education_field, business_travel, overtime,
-                  job_level, stock_option_level,
-                  f"{total_working_years} yrs", f"{years_at_company} yrs"],
-    })
-    st.dataframe(snap, hide_index=True, use_container_width=True)
+    st.dataframe(
+        filtered_df,
+        use_container_width=True,
+        column_config={
+            "Risk Score": st.column_config.ProgressColumn(
+                "Risk Score", min_value=0, max_value=100, format="%.1f%%"
+            )
+        },
+        hide_index=True
+    )
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("""
-<div style="text-align:center;padding:24px 0 8px;color:#334155;font-size:13px;">
+<div style="text-align:center;padding:24px 0 8px;color:#475569;font-size:13px;">
     Developed by <strong style="color:#60A5FA">Akash Mishra</strong>
-    · Employee Attrition Intelligence Platform
-    · Model: Logistic Regression + SMOTE
+    · Employee Retention Intelligence Platform
+    · Model: Logistic Regression + SMOTE · Explainability: SHAP
 </div>
 """, unsafe_allow_html=True)

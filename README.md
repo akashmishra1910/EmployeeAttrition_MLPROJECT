@@ -1,267 +1,153 @@
+# 📊 Employee Retention Intelligence Platform
 
+An end-to-end Machine Learning and Explainable AI (XAI) application that predicts employee attrition risk, explains predictions using SHAP (SHapley Additive exPlanations), and provides actionable workforce retention insights.
 
-📊 # Employee Attrition Intelligence Platform
+Developed by **Akash Mishra** | B.Tech Computer Science & Engineering
 
-An end-to-end Machine Learning application that predicts employee attrition risk and provides actionable workforce insights. The system helps HR teams identify employees who are likely to leave the organization and enables proactive retention strategies.
+---
 
-⸻
+## 🚀 Project Overview
 
-🚀 Project Overview
+Employee attrition (turnover) is a costly challenge for modern organizations, resulting in steep replacement costs, loss of institutional knowledge, and team disruption.
 
-Employee attrition is a major challenge for organizations, leading to increased recruitment costs, productivity loss, and knowledge gaps.
+This platform bridges machine learning with actionable HR strategy:
+1. **Predictive Risk Assessment:** Estimates the probability that an employee will leave.
+2. **Transparent Explainability (SHAP):** Unpacks the model's "black box" to reveal the specific factors driving the individual prediction.
+3. **Proactive Retention Recommendations:** Translates model attributions into supportive workplace interventions.
+4. **What-If Risk Simulation:** Allows HR leaders to test how modifying workplace levers (e.g., eliminating overtime, improving role satisfaction) changes estimated flight risk.
+5. **Ranked Cohort Triage:** Prioritizes at-risk employee cohorts across departments.
 
-This project leverages Machine Learning techniques to analyze employee data and predict attrition probability with high accuracy. The application is deployed through an interactive Streamlit dashboard for real-time predictions and HR analytics.
+---
 
-⸻
+## 🧠 Machine Learning & Methodology
 
-✨ Features
+### 1. Business Problem & Dataset
+- **Dataset:** IBM HR Analytics Employee Attrition dataset (1,470 records, 35 features).
+- **Target:** `Attrition` (`Yes` = 1, `No` = 0).
+- **Class Imbalance:** 84% retained (`No`), 16% resigned (`Yes`).
 
-🔍 Attrition Risk Prediction
+### 2. Why Class Imbalance Matters
+In employee turnover prediction, missing an employee who leaves (**False Negative**) is vastly more costly to an organization than checking in on an employee who is content (**False Positive**). Therefore, **Recall** on the minority class (`Attrition = 1`) is our primary evaluation metric.
 
-* Predicts whether an employee is likely to leave the organization.
-* Displays attrition probability score.
-* Provides risk classification:
-    * 🟢 Low Risk
-    * 🟡 Medium Risk
-    * 🔴 High Risk
+### 3. Pipeline & Techniques
+- **Preprocessing:**
+  - Removed constant/non-informative columns (`EmployeeCount`, `EmployeeNumber`, `Over18`, `StandardHours`).
+  - Feature Engineering:
+    - $\text{IncomePerYear} = \text{MonthlyIncome} \times 12$
+    - $\text{ExperienceRatio} = \frac{\text{YearsAtCompany}}{\text{TotalWorkingYears} + 1}$
+  - Categorical Encoding: `LabelEncoder` for nominal attributes.
+  - Scaling: `StandardScaler` fitted on training split only.
+- **Resampling:** Synthetic Minority Over-sampling Technique (**SMOTE**) applied exclusively to the training split (`X_train_scaled`, `y_train`) to balance classes without test-set leakage.
+- **Model:** **Logistic Regression** ($L_2$ regularized, `max_iter=1000`).
 
-📈 HR Analytics Dashboard
+### 4. Mathematical Foundations
 
-* Department-wise attrition trends
-* Salary distribution analysis
-* Job satisfaction insights
-* Work-life balance analysis
-* Overtime impact visualization
+#### Logistic Regression Hypothesis:
+$$P(Y=1 \mid X) = \frac{1}{1 + e^{-z}} \quad \text{where} \quad z = \beta_0 + \sum_{i=1}^p \beta_i X_i$$
 
-🤖 Machine Learning Pipeline
+#### Risk Score Calculation:
+$$\text{Risk Score (\%)} = P(\text{Attrition}=1 \mid X) \times 100$$
 
-* Data preprocessing
-* Feature encoding
-* Feature scaling
-* SMOTE oversampling for class balancing
-* Model training and evaluation
+#### Provisional Risk Tiers:
+- **🟢 Low Risk:** $< 30\%$
+- **🟡 Medium Risk:** $30\% \le \text{Score} < 60\%$
+- **🔴 High Risk:** $\ge 60\%$
+*(Note: These are configurable triage thresholds for demonstration, not hard causal boundaries.)*
 
-📊 Explainable Predictions
+---
 
-* Probability-based predictions
-* Confidence scores
-* Employee retention insights
+## 📊 Measured Model Performance (Held-Out Test Set)
 
-🎨 Modern Streamlit UI
+Evaluated on 20% stratified test split ($N = 294$, containing 47 true attrition cases):
 
-* Responsive dark-themed dashboard
-* Interactive widgets
-* Real-time prediction engine
-* Visual analytics
+| Model & Approach | Accuracy | Precision | **Recall (Attrition=1)** | F1-Score | ROC-AUC | PR-AUC |
+|---|---|---|---|---|---|---|
+| **Logistic Regression + SMOTE** (Selected) | **76.5%** | **38.5%** | **78.7%** 🎯 | **0.518** | **0.813** 🏆 | **0.617** |
+| Logistic Regression (Class-Weight Balanced) | 75.5% | 37.1% | 76.6% | 0.500 | 0.813 | 0.616 |
+| Random Forest + SMOTE | 84.4% | 52.2% | 25.5% ⚠️ | 0.343 | 0.809 | 0.584 |
+| Decision Tree + SMOTE | 78.9% | 35.3% | 38.3% | 0.367 | 0.625 | 0.320 |
 
-⸻
+> **Key Evaluation Insight:** While Random Forest achieves higher superficial accuracy (84.4%), it fails to detect nearly 75% of actual resignations (Recall: 25.5%). Logistic Regression with SMOTE identifies almost 8 out of 10 at-risk employees (**78.7% Recall**), making it the optimal model for HR retention triage.
 
-🛠️ Tech Stack
+---
 
-Programming Language
+## 🔍 Explainable AI (XAI) with SHAP
 
-* Python
+The platform uses `shap.LinearExplainer` to decompose each employee's prediction:
 
-Machine Learning
+$$\ln\left(\frac{P}{1 - P}\right) = \phi_0 + \sum_{i=1}^M \phi_i$$
 
-* Scikit-Learn
-* Random Forest Classifier
-* Logistic Regression
-* XGBoost (optional)
-* SMOTE
+- **$\phi_0$ (Base Value):** The expected background log-odds of attrition.
+- **$\phi_i$ (SHAP Attribution):**
+  - **Positive ($\phi_i > 0$, Red):** Pushes the model toward predicting attrition (higher flight risk).
+  - **Negative ($\phi_i < 0$, Green):** Pushes the model toward predicting retention (stability).
 
-Data Analysis
+> ⚠️ **Important Interpretation Principle:** SHAP explains the *mathematical reasoning of the model*, not physical real-world causation. For example, working overtime increases the model's flight risk estimate, but does not guarantee an employee will quit.
 
-* Pandas
-* NumPy
+---
 
-Visualization
+## 🛠️ Tech Stack & Architecture
 
-* Matplotlib
-* Plotly
-* Seaborn
+- **Language:** Python 3.10+
+- **Machine Learning:** `scikit-learn`, `imbalanced-learn` (SMOTE), `joblib`
+- **Explainability:** `shap`
+- **Interactive UI:** `streamlit`, `plotly`
+- **Data Manipulation:** `pandas`, `numpy`
 
-Deployment
-
-* Streamlit
-
-⸻
-
-📂 Project Structure
-
-Employee-Attrition-Intelligence-Platform/
-│
-├── app.py
-├── Employee_Attrition_Prediction_System.ipynb
-│
-├── Model/
-│   ├── attrition_model.pkl
-│   ├── scaler.pkl
-│   ├── encoders.pkl
-│   └── feature_names.pkl
-│
+### Project Structure:
+```text
+Employee-Retention-Intelligence/
 ├── Dataset/
 │   └── WA_Fn-UseC_-HR-Employee-Attrition.csv
-│
-├── requirements.txt
-├── README.md
-└── assets/
+├── Model/
+│   ├── attrition_model.pkl    # Trained Logistic Regression model
+│   ├── scaler.pkl             # StandardScaler instance
+│   ├── encoders.pkl           # Categorical LabelEncoders dict
+│   └── feature_names.pkl      # Feature column names & order
+├── Notebook/
+│   └── Employee_Attrition_Project_Notebook.ipynb
+└── Streamlit_App/
+    ├── app.py                 # Streamlit application
+    ├── explainability.py      # SHAP LinearExplainer & Plotly visualization
+    ├── recommendations.py     # Transparent rule-based retention logic
+    ├── risk_scoring.py        # Centralized risk scoring & tier categorization
+    └── requirements.txt       # Project dependencies
+```
 
-⸻
+---
 
-📋 Dataset
+## 💻 Installation & Execution
 
-Dataset Used:
-
-IBM HR Analytics Employee Attrition & Performance Dataset
-
-Features include:
-
-* Age
-* Department
-* Job Role
-* Monthly Income
-* Years at Company
-* Overtime
-* Job Satisfaction
-* Environment Satisfaction
-* Work-Life Balance
-* Distance From Home
-* Education Level
-* Business Travel
-
-Target Variable:
-
-Attrition
-├── Yes (Employee likely to leave)
-└── No (Employee likely to stay)
-
-⸻
-
-⚙️ Installation
-
-Clone Repository
-
+### 1. Clone the repository
+```bash
 git clone https://github.com/akashmishra1910/EmployeeAttrition_MLPROJECT.git
-cd EmployeeAttrition_MLPROJECT
-Create Virtual Environment
+cd EmployeeAttrition_MLPROJECT/Streamlit_App
+```
 
-python -m venv venv
-
-Activate environment:
-
-source venv/bin/activate
-
-or
-
-venv\Scripts\activate
-
-Install Dependencies
-
+### 2. Install dependencies
+```bash
 pip install -r requirements.txt
+```
 
-⸻
-
-▶️ Run Application
-
+### 3. Launch the dashboard
+```bash
 streamlit run app.py
+```
+Open your browser at `http://localhost:8501`.
 
-Application will start at:
+---
 
-http://localhost:8501
+## ⚠️ Limitations & Ethical Considerations
 
-⸻
+1. **Probability Calibration:** Logistic Regression probabilities with SMOTE training are effective ranking heuristics, but are slightly shifted by synthetic sampling and may benefit from Platt scaling / isotonic calibration before absolute probability interpretation.
+2. **Observational vs. Causal:** Predictions and SHAP attributions represent observed statistical correlations, not experimental causal proof.
+3. **Supportive Actions Only:** Retention suggestions are supportive workplace guidelines (workload checks, 1-on-1 conversations). The system must never be used for punitive, adverse, or automated termination decisions.
 
-🧠 Machine Learning Workflow
+---
 
-Raw Data
-    ↓
-Data Cleaning
-    ↓
-Label Encoding
-    ↓
-Feature Scaling
-    ↓
-SMOTE Oversampling
-    ↓
-Model Training
-    ↓
-Evaluation
-    ↓
-Model Saving
-    ↓
-Streamlit Deployment
+## 👨‍💻 Author
 
-⸻
-
-📊 Model Performance
-
-Model	Accuracy	Precision	Recall	F1 Score
-Logistic Regression	76.5%	38.5%	78.7%	51.7%
-Random Forest	Best Performing	High	High	High
-
-Selected Model: Random Forest Classifier
-
-Reason:
-
-* Better generalization
-* Handles non-linearity
-* Robust against overfitting
-* Strong performance on imbalanced data
-
-⸻
-
-🔮 Future Enhancements
-
-* SHAP Explainability
-* Employee Retention Recommendations
-* Department-Level Risk Forecasting
-* Real-Time Database Integration
-* Cloud Deployment (AWS/Azure)
-* Automated Model Retraining
-* HR Chatbot Assistant
-
-
-🎯 Business Impact
-
-This solution can help organizations:
-
-✅ Reduce employee turnover
-
-✅ Improve workforce planning
-
-✅ Lower recruitment costs
-
-✅ Increase employee retention
-
-✅ Enable data-driven HR decisions
-
-⸻
-
-👨‍💻 Author
-
-Akash Mishra
-
-Data Science | Machine Learning | AI Enthusiast
-
-GitHub: https://github.com/yourusername
-
-LinkedIn: https://linkedin.com/in/akashmishra1910
-
-⸻
-
-⭐ Support
-
-If you found this project useful:
-
-⭐ Star the repository
-
-🍴 Fork the repository
-
-📢 Share with others
-
-⸻
-
-License
-
-This project is licensed under the MIT License.
+**Akash Mishra**  
+B.Tech Computer Science & Engineering  
+- GitHub: [akashmishra1910](https://github.com/akashmishra1910)  
+- LinkedIn: [akashmishra1910](https://linkedin.com/in/akashmishra1910)
