@@ -1,6 +1,6 @@
 """
-explainability.py - SHAP Model Explanation Module
---------------------------------------------------
+explainability.py - SHAP Model Explanation Module (Light-Mode SaaS Edition)
+---------------------------------------------------------------------------
 Explains individual employee attrition predictions using SHAP (SHapley Additive exPlanations).
 
 Key Design Principles:
@@ -8,6 +8,7 @@ Key Design Principles:
 2. Uses shap.LinearExplainer for mathematically exact, fast log-odds attribution.
 3. Maps raw feature names to human-readable business labels.
 4. Distinguishes model attribution from causal claims (explains model reasoning, not proof).
+5. Provides beautifully styled Plotly charts suited for a clean light-mode SaaS theme.
 """
 
 import shap
@@ -110,38 +111,82 @@ def explain_prediction(explainer, scaled_features, feature_names, top_k=5):
 
 def create_shap_bar_chart(top_features):
     """
-    Builds a clean, styled horizontal bar chart showing top SHAP feature contributions.
-    Positive values (Red) push toward attrition.
-    Negative values (Green) push toward retention.
+    Builds a clean, styled horizontal bar chart showing top SHAP feature contributions
+    optimized for the modern Light-Mode SaaS interface.
+    Positive values (#E5484D - Coral Red) push toward attrition.
+    Negative values (#16A673 - Jade Green) push toward retention.
     """
     # Reverse so largest impact appears on top
     items = list(reversed(top_features))
     labels = [item["Feature"] for item in items]
     vals = [item["SHAPValue"] for item in items]
-    colors = ["#E24B4A" if v > 0 else "#639922" for v in vals]
-    texts = [f"{v:+.3f} (Log-Odds)" for v in vals]
+    colors = ["#E5484D" if v > 0 else "#16A673" for v in vals]
+    texts = [f"{v:+.2f} log-odds" for v in vals]
     
     fig = go.Figure(go.Bar(
         x=vals,
         y=labels,
         orientation="h",
-        marker=dict(color=colors, cornerradius=4),
+        marker=dict(color=colors, cornerradius=5),
         text=texts,
         textposition="outside",
-        textfont=dict(color="white", size=12),
+        textfont=dict(color="#1E2235", size=11, family="Inter, sans-serif"),
     ))
     
     fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
         xaxis=dict(
-            title=dict(text="SHAP Contribution (Log-Odds Impact on Model Output)", font=dict(color="#94A3B8", size=11)),
-            gridcolor="rgba(255,255,255,0.06)",
-            tickfont=dict(color="#94A3B8", size=11),
-            zerolinecolor="rgba(255,255,255,0.2)",
+            title=dict(text="SHAP Feature Contribution (Log-Odds Impact on Risk Output)", font=dict(color="#697386", size=11)),
+            gridcolor="#F1F3F9",
+            tickfont=dict(color="#697386", size=10),
+            zerolinecolor="#CBD5E1",
+            zerolinewidth=1.5,
         ),
-        yaxis=dict(tickfont=dict(color="#CBD5E1", size=12)),
-        margin=dict(t=10, b=30, l=10, r=80),
-        height=280,
+        yaxis=dict(tickfont=dict(color="#1E2235", size=11, family="Inter, sans-serif")),
+        margin=dict(t=10, b=30, l=10, r=90),
+        height=260,
+    )
+    return fig
+
+
+def create_global_feature_importance_chart(model, feature_names, top_k=10):
+    """
+    Computes global feature weights from Logistic Regression coefficients
+    and renders an elegant light-mode horizontal ranking chart.
+    """
+    coefs = model.coef_[0]
+    records = []
+    for raw_name, coef in zip(feature_names, coefs):
+        records.append({
+            "Feature": FEATURE_DISPLAY_NAMES.get(raw_name, raw_name),
+            "Coefficient": float(coef),
+            "AbsImpact": abs(float(coef)),
+            "Type": "Increases Risk" if coef > 0 else "Decreases Risk"
+        })
+    df_global = pd.DataFrame(records).sort_values(by="AbsImpact", ascending=True).tail(top_k)
+    
+    colors = ["#E5484D" if c > 0 else "#16A673" for c in df_global["Coefficient"]]
+    
+    fig = go.Figure(go.Bar(
+        x=df_global["AbsImpact"],
+        y=df_global["Feature"],
+        orientation="h",
+        marker=dict(color=colors, cornerradius=5),
+        text=[f"{val:.2f}" for val in df_global["AbsImpact"]],
+        textposition="outside",
+        textfont=dict(color="#1E2235", size=11),
+    ))
+    fig.update_layout(
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        xaxis=dict(
+            title=dict(text="Overall Model Importance (|Log-Odds Weight|)", font=dict(color="#697386", size=11)),
+            gridcolor="#F1F3F9",
+            tickfont=dict(color="#697386", size=10),
+        ),
+        yaxis=dict(tickfont=dict(color="#1E2235", size=11)),
+        margin=dict(t=10, b=30, l=10, r=50),
+        height=320,
     )
     return fig
